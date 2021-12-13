@@ -1,0 +1,553 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  The Clarusway Blog Page Application aims to deploy blog application as a web 
+  application written Django Framework on AWS Cloud Infrastructure. This infrastructure 
+  has Application Load Balancer with Auto Scaling Group of Elastic Compute Cloud (EC2) 
+  Instances and Relational Database Service (RDS) on defined VPC. Also, The Cloudfront
+  and Route 53 services are located in front of the architecture and manage the traffic in secure.
+  User is able to upload pictures and videos on own blog page and these are kept on S3 Bucket. 
+  This architecture will be created by Firms DevOps Guy.
+  
+Parameters:
+
+  MyKeyName:
+    Description: Please enter your valid Key pair
+    Type: AWS::EC2::KeyPair::KeyName
+
+  MySubnets:
+    Description: Choose your subnets. 
+    Type: List<AWS::EC2::Subnet::Id>
+  
+  MySNSTopic:
+    Type: AWS::SNS::Topic
+    Description:  Topic Name
+    Default: my-topic
+
+  parameter-
+Resources:
+## VPC
+  PubPrivateVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+
+  LogicalID:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PolicyDocument: "S3Enpoint" : {
+    "Type" : "AWS::EC2::VPCEndpoint",
+    "Properties" : {
+        "PolicyDocument" : {
+            "Version":"2012-10-17",
+            "Statement":[{
+                "Effect":"Allow",
+                "Principal": "*",
+                "Action":["s3:GetObject"],
+                "Resource":["arn:aws:s3:::examplebucket/*"]
+            }]
+        },
+        "RouteTableIds" : [ {"Ref" : "PublicRouteTable"}, {"Ref" : "PrivateRouteTable"} ],
+        "ServiceName" : { "Fn::Join": [ "", [ "com.amazonaws.", { "Ref": "AWS::Region" }, ".s3" ] ] },
+        "VpcId" : {"Ref" : "PubPrivateVPC"}
+    }
+}
+      PrivateDnsEnabled: true
+      RouteTableIds:
+        - !Ref PublicRouteTable
+        - !Ref PrivateRouteTable
+      SecurityGroupIds:
+        - WebServerSecurityGroup.GroupId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm" # Required
+      SubnetIds:
+        - !Ref  PrivateSubnet1A
+        - !Ref  PrivateSubnet1B
+      VpcEndpointType: Interface
+      VpcId: !Ref PubPrivateVPC # Required
+
+  ## SUBNETS     
+  PublicSubnet1A:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      AvailabilityZone: us-east-1a
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+
+  PublicSubnet1B:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      AvailabilityZone: us-east-1b
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+
+  PrivateSubnet1A:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      AvailabilityZone: us-east-1a
+      CidrBlock: 10.0.3.0/24
+      MapPublicIpOnLaunch: false
+
+  PrivateSubnet1B:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      AvailabilityZone: us-east-1b
+      CidrBlock: 10.0.4.0/24
+      MapPublicIpOnLaunch: false
+
+  ## INTERNET GATEWAY
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  GatewayToInternet:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  ## PUBLIC ROUTING
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayToInternet
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1ARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1A
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet1BRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1B
+      RouteTableId: !Ref PublicRouteTable
+
+  ## PRIVATE ROUTING
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      InstanceId: !Ref NATinstancepublic1A
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+
+  PrivateSubnet1ARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1A
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet1BRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1B
+      RouteTableId: !Ref PrivateRouteTable
+  
+#NATINSTANCE  
+  NATinstancepublic1A:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-00a36856283d67c39 #NAT instance ami
+      InstanceType: t2.micro
+      KeyName: !Ref MyKeyName
+      VpcId: !Ref PubPrivateVPC
+      SubnetId: !Ref PublicSubnet1A
+      SourceDestCheck: false
+      SecurityGroupIds:
+        - !GetAtt NATinstanceSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: NATinstance
+
+  WebServerLT:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: ami-0279c3b3186e54acd #ubuntu 18.04
+        InstanceType: t2.micro
+        KeyName: !Ref MyKeyName
+        VpcId: !Ref PubPrivateVPC
+        SubnetId: !Ref PrivateSubnet1A
+        SecurityGroupIds: 
+          - !GetAtt WebServerSecurityGroup.GroupId
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub Web Server of ${AWS::StackName} Stack
+        UserData: 
+          Fn::Base64:
+            !Sub 
+              - |
+                #! /bin/bash
+                apt-get update -y
+                apt-get install git -y
+                apt-get install python3 -y
+                cd /home/ubuntu/
+                TOKEN="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"
+                git clone https://$TOKEN@<YOUR GITHUB REPO URL>
+                cd /home/ubuntu/<YOUR GITHUB REPO NAME>
+                apt install python3-pip -y
+                apt-get install python3.7-dev libmysqlclient-dev -y
+                pip3 install -r requirements.txt
+                cd /home/ubuntu/<YOUR GITHUB REPO NAME>/src
+                python3 manage.py collectstatic --noinput
+                python3 manage.py makemigrations
+                python3 manage.py migrate
+                python3 manage.py runserver 0.0.0.0:80
+              - MyDBURI: !GetAtt MyDatabaseServer.Endpoint.Address
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP for Application Load Balancer
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  NATinstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP for django web Server and SSH into EC2
+      VpcId: !Ref PubPrivateVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId:  !GetAtt ALBSecurityGroup.GroupId
+
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP for django web Server and SSH into EC2
+      VpcId: !Ref PubPrivateVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId:  !GetAtt NATinstanceSecurityGroup.GroupId
+
+  WebServerTG:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      UnhealthyThresholdCount: 3
+      HealthyThresholdCount: 2
+      VpcId: !Ref PubPrivateVPC
+  
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: ipv4
+      Scheme: internet-facing
+      SecurityGroups:
+        - !GetAtt ALBSecurityGroup.GroupId
+      Subnets: !Ref MySubnets
+      Type: application
+      
+  ALBListener:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+   Properties:
+     DefaultActions:
+       - Type: "redirect"
+       - TargetGroupArn: !Ref WebServerTG
+         RedirectConfig:
+           Protocol: "HTTPS"
+           Port: 443
+           Host: "#{host}"
+           Path: "/#{path}"
+           Query: "#{query}"
+           StatusCode: "HTTP_301"
+     LoadBalancerArn: !Ref ApplicationLoadBalancer # Required
+     Port: 80
+     Protocol: "HTTP"
+
+  WebServerASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AvailabilityZones:
+        !GetAZs ""
+      DesiredCapacity: 2
+      HealthCheckGracePeriod: 90
+      HealthCheckType: ELB
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WebServerLT
+        Version: !GetAtt WebServerLT.LatestVersionNumber
+      MaxSize: 4 # Required
+      MinSize: 2 # Required
+      TargetGroupARNs:
+        - !Ref WebServerTG
+  
+  ASGTargetScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref WebServerASG  # Required
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        ASGAverageCPUUtilization: 
+          TargetValue: %70
+        ALBRequestCountPerTarget:
+          TargetValue: 200
+
+  SNSPolicyforCapstone:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument: {             # Required
+    "Sid": "Allow_Publish_Alarms",
+    "Effect": "Allow",
+    "Principal": {
+        "Service": [
+            "cloudwatch.amazonaws.com"
+        ]
+    },
+    "Action": "sns:Publish",
+    "Resource": "arn:aws:sns:<region>:<account-id>:<topic-name>",
+    "Condition": {
+        "ArnLike": {
+            "aws:SourceArn": "arn:aws:cloudwatch:<region>:<account-id>:alarm:<alarm-name>"
+        }
+    }
+} 
+      Topics: # Required
+        !Ref SNSforCapstone
+
+  SNSforCapstone: 
+   Type: AWS::SNS::Topic
+   Properties: 
+     Subscription: 
+       - Endpoint: "gashcin23@gmail.com"
+         Protocol: "email"
+     TopicName: !Ref MySNSTopic
+  
+  MyDBSecurityGroup:
+    Type: AWS::RDS::DBSecurityGroup
+    Properties:
+      GroupDescription: access to RDS
+      DBSecurityGroupIngress:
+        - CIDRIP: 0.0.0.0/0
+        - EC2SecurityGroupId: !GetAtt WebServerSecurityGroup.GroupId
+  
+  MyDatabaseServer:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      AllocatedStorage: 20
+      AllowMajorVersionUpgrade: false
+      AutoMinorVersionUpgrade: true
+      BackupRetentionPeriod: 0
+      DBInstanceIdentifier: gaskin-db
+      VpcId: !Ref PubPrivateVPC
+      SubnetIds: !Ref PrivateSubnet1A
+      DBName: Capstone
+      DBSecurityGroups:
+        - !Ref MyDBSecurityGroup
+      Engine: MySQL
+      DBInstanceClass: db.t2.micro
+      EngineVersion: 8.0.20
+      MasterUserPassword: Gaskin_1
+      MasterUsername: admin
+      Port: 3306
+      PubliclyAccessible: true
+
+   S3FirstBucket:
+    Type: AWS::S3::Bucket
+     DependsOn:
+      - ProcessingLambdaPermission
+    Properties:
+      BucketName: S3FirstBucket
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: 's3:ObjectCreated:*'
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: test/
+                  - Name: suffix
+                    Value: .txt
+            Function: !GetAtt Lambda.Arn
+  
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: lambda.handler
+      Role: !GetAtt LambdaRole.Arn
+      Code:
+        ZipFile: !Sub |
+          import json
+          import boto3
+
+          def lambda_handler(event, context):
+              s3 = boto3.client("s3")
+              
+              if event:
+                  print("Event: ", event)
+                  filename = str(event['Records'][0]['s3']['object']['key'])
+                  timestamp = str(event['Records'][0]['eventTime'])
+                  event_name = str(event['Records'][0]['eventName']).split(':')[0][6:]
+                  
+                  filename1 = filename.split('/')
+                  filename2 = filename1[-1]
+                  
+                  dynamo_db = boto3.resource('dynamodb')
+                  dynamoTable = dynamo_db.Table('awscapstoneDynamo')
+                  
+                  dynamoTable.put_item(Item = {
+                      'id': filename2,
+                      'timestamp': timestamp,
+                      'Event': event_name,
+                  })
+                  
+              return "Lammda success"
+      Runtime: python 3.9               
+
+  S3InvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub arn:aws:s3:::${BucketName}
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: '/'
+      Policies:
+      - PolicyName: s3
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              - s3:Get*
+            Resource:
+              - !Sub arn:aws:s3:::${BucketName}
+              - !Sub arn:aws:s3:::${BucketName}/*   
+  LambdaTrigger:
+    Type: 'Custom::LambdaTrigger'
+    DependsOn: LambdaInvokePermission
+    Properties:
+      ServiceToken: !GetAtt CustomResourceLambdaFunction.Arn
+      LambdaArn: !GetAtt S3NotificationLambdaFunction.Arn
+      Bucket: !Ref S3FirstBucket
+
+  S3SecondBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: PublicRead
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+    DeletionPolicy: Retain
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      PolicyDocument:
+        Id: MyPolicy
+        Version: 2012-10-17
+        Statement:
+          - Sid: PublicReadForGetBucketObjects
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref S3SecondBucket
+                - /*
+      Bucket: !Ref S3SecondBucket
+
+  DNSHostedZone:
+    Type: "AWS::Route53::HostedZone"
+    Properties:
+      Name: PrivateZone
+  
+  DnsRecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      AliasTarget:
+        DNSName: "String"
+        HostedZoneId: !Ref DNSHostedZone
+      Comment: 
+      Failover: "String"
+      HealthCheckId: "String"
+      HostedZoneId: "String"
+      Name: "String" # Required
+      Region: "String"
+      ResourceRecords:
+        ResourceRecords
+      SetIdentifier: "String"
+      TTL: "String"
+      Type: "String" # Required
+      Weight: Number
+ 
+  
+
+Outputs:
+  WebsiteURL:
+    Value: !Sub 
+      - http://${ALBAdress}
+      - ALBAdress: !GetAtt ApplicationLoadBalancer.DNSName
+    Description: Phonebook Application Load Balancer URL
+  WebsiteURL:
+    Value: !GetAtt 
+      - S3Bucket
+      - WebsiteURL
+    Description: URL for website hosted on S3
+  S3BucketSecureURL:
+    Value: !Join 
+      - ''
+      - - 'https://'
+        - !GetAtt 
+          - S3Bucket
+          - DomainName
+    Description: Name of S3 bucket to hold website content
+    
+  MyTopicArn: 
+    Description: Arn of Created SNS Topic
+    Value: !Ref MySNSTopic
+
+

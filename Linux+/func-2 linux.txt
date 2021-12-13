@@ -1,0 +1,11 @@
+#!/bin/bash
+read -p "enter the file name: " filename
+until [[ -f $filename ]]
+do
+  echo "myfile yok"
+  sleep 3
+  if [[ -f $filename ]]; then
+	echo "myfile var"
+	break
+  fi
+done
